@@ -1,11 +1,18 @@
 import TelegramApi from 'node-telegram-bot-api';
 import {config} from 'dotenv';
+import {Client} from "@notionhq/client"
 
 config();
 
-const token = process.env.TELEGRAM_API_TOKEN;
+const telegramToken = process.env.TELEGRAM_API_TOKEN;
+const notionToken = process.env.NOTION_API_TOKEN
+const notionPlannerDatabaseId = process.env.NOTION_PLANER_DATABASE_ID
+const notionBooksDatabaseId = process.env.NOTION_BOOKS_DATABASE_ID
+const notionTVDatabaseId = process.env.NOTION_TV_DATABASE_ID
+const notionBotTag = process.env.NOTION_BOT_TAG
+const notion = new Client({auth: notionToken})
 
-const bot = new TelegramApi(token, {polling: true});
+const bot = new TelegramApi(telegramToken, {polling: true});
 const notionTypes = {
     reply_markup: JSON.stringify({
         inline_keyboard: [
@@ -28,25 +35,16 @@ bot.on('message', async message => {
     const chatId = message.chat.id;
     switch (text) {
         case '/start':
-            return bot.sendMessage(chatId, `Добро пожаловать!`);
+            return startCommandHandler(chatId);
             break;
         case '/notion':
-            return bot.sendMessage(chatId, `Выберите базу данных`, notionTypes);
-            break;
-        case '/notiontask':
-            return bot.sendMessage(chatId, `Напишите или воспользуйтесь голосовым помошником`);
-            break;
-        case '/notionbook':
-            return bot.sendMessage(chatId, `Напишите или воспользуйтесь голосовым помошником`);
-            break;
-        case '/notiontv':
-            return bot.sendMessage(chatId, `Напишите или воспользуйтесь голосовым помошником`);
+            return notionCommandHandler(chatId);
             break;
         case '/info':
-            return bot.sendMessage(chatId, `Справка по боту`);
+            return infoCommandHandler(chatId);
             break;
         default:
-            return bot.sendMessage(chatId, `Неопознанная команда! Введите /info для справки.`);
+            return defaultCommandHandler(chatId, text);
             break;
     }
 })
@@ -55,3 +53,111 @@ bot.on('callback_query', async msg => {
     const chatId = msg.message.chat.id;
     return bot.sendMessage(chatId, msg.data);
 })
+
+// Handlers
+async function startCommandHandler(chatId) {
+    return bot.sendMessage(chatId, `Добро пожаловать!`);
+}
+
+async function notionCommandHandler(chatId) {
+    // await addNotionPageToPlanner('New task');
+    // await addNotionPageToBooks('New book');
+    // await addNotionPageToTV('New TV');
+    return bot.sendMessage(chatId, `Выберите базу данных`, notionTypes)
+}
+
+async function infoCommandHandler(chatId) {
+    return bot.sendMessage(chatId, `Справка по боту`);
+}
+
+async function defaultCommandHandler(chatId, text) {
+    if (text.match(/^\//)) {
+        return bot.sendMessage(chatId, `Неопознанная команда! Введите /info для справки.`);
+    }
+    // Пока идея такая - получать историю до последней введенной команды и определять на каком шаге сейчас находимся (этот код инкапсулировать бы в классы js)
+}
+
+// Notion API
+async function addNotionPageToPlanner(title) {
+    try {
+        const response = await notion.pages.create({
+            parent: {database_id: notionPlannerDatabaseId},
+            properties: {
+                title: {
+                    title: [
+                        {
+                            "text": {
+                                "content": title
+                            }
+                        }
+                    ]
+                },
+                Tags: {
+                    multi_select: [
+                        {name: notionBotTag}
+                    ]
+                }
+            },
+        })
+        console.log(response)
+        console.log("Success! Entry added.")
+    } catch (error) {
+        console.error('Error: ', error.body);
+    }
+}
+
+async function addNotionPageToBooks(title) {
+    try {
+        const response = await notion.pages.create({
+            parent: {database_id: notionBooksDatabaseId},
+            properties: {
+                title: {
+                    title: [
+                        {
+                            "text": {
+                                "content": title
+                            }
+                        }
+                    ]
+                },
+                Tags: {
+                    multi_select: [
+                        {name: notionBotTag}
+                    ]
+                }
+            },
+        })
+        console.log(response)
+        console.log("Success! Entry added.")
+    } catch (error) {
+        console.error('Error: ', error.body);
+    }
+}
+
+async function addNotionPageToTV(title) {
+    try {
+        const response = await notion.pages.create({
+            parent: {database_id: notionTVDatabaseId},
+            properties: {
+                title: {
+                    title: [
+                        {
+                            "text": {
+                                "content": title
+                            }
+                        }
+                    ]
+                },
+                Tags: {
+                    multi_select: [
+                        {name: notionBotTag}
+                    ]
+                }
+            },
+        })
+        console.log(response)
+        console.log("Success! Entry added.")
+    } catch (error) {
+        console.error('Error: ', error.body);
+    }
+}
