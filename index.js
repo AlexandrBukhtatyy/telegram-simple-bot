@@ -1,27 +1,118 @@
 import TelegramApi from 'node-telegram-bot-api';
+import NodeCache from 'node-cache';
 import {config} from 'dotenv';
-import {Client} from "@notionhq/client"
+import {Client} from '@notionhq/client';
 
 config();
 
 const telegramToken = process.env.TELEGRAM_API_TOKEN;
-const notionToken = process.env.NOTION_API_TOKEN
-const notionPlannerDatabaseId = process.env.NOTION_PLANER_DATABASE_ID
-const notionBooksDatabaseId = process.env.NOTION_BOOKS_DATABASE_ID
-const notionTVDatabaseId = process.env.NOTION_TV_DATABASE_ID
-const notionBotTag = process.env.NOTION_BOT_TAG
-const notion = new Client({auth: notionToken})
-
 const bot = new TelegramApi(telegramToken, {polling: true});
+
+const cache = new NodeCache({stdTTL: 1000});
+
+const notionToken = process.env.NOTION_API_TOKEN
+const notionBotTag = process.env.NOTION_BOT_TAG
+const notionClient = new Client({auth: notionToken})
+
+const NOTION_STORIES_KEYS = {
+    NotionTask: 'notiontask',
+    NotionBook: 'notionbook',
+    NotionTV: 'notiontv',
+};
+
 const notionTypes = {
     reply_markup: JSON.stringify({
         inline_keyboard: [
-            [{text: 'Task', callback_data: '/notiontask'}],
-            [{text: 'Book', callback_data: '/notionbook'}],
-            [{text: 'TV', callback_data: '/notiontv'}],
+            [{text: 'Task', callback_data: NOTION_STORIES_KEYS.NotionTask}],
+            [{text: 'Book', callback_data: NOTION_STORIES_KEYS.NotionBook}],
+            [{text: 'TV', callback_data: NOTION_STORIES_KEYS.NotionTV}],
         ]
     })
 };
+
+const NOTION_DATABASES = {
+    [NOTION_STORIES_KEYS.NotionTask]: process.env.NOTION_PLANER_DATABASE_ID,
+    [NOTION_STORIES_KEYS.NotionBook]: process.env.NOTION_BOOKS_DATABASE_ID,
+    [NOTION_STORIES_KEYS.NotionTV]: process.env.NOTION_TV_DATABASE_ID,
+};
+
+/**
+ * Работа с хранилищем данных
+ */
+// TODO: Сделать синглтоном
+class Storage {
+
+    has(key) {
+        return !!cache.has(key);
+    }
+
+    get(key) {
+        const value = cache.get(key);
+        return value
+            ? Storage.deserialize(cache.get(key))
+            : null;
+    }
+
+    set(key, value) {
+        cache.set(key, Storage.serialize(value));
+    }
+
+    clear(key) {
+        cache.del(key);
+    }
+
+    static serialize(value) {
+        return JSON.stringify(value);
+    }
+
+    static deserialize(value) {
+        return JSON.parse(value);
+    }
+}
+
+const storage = new Storage();
+
+/**
+ * Работа со сценариями
+ */
+class Story {
+    currentStep = 0;
+    steps = null;
+
+    constructor(steps) {
+        this.steps = steps
+    }
+
+    setStep(stepNumber) {
+        this.currentStep = stepNumber;
+    }
+
+    getMessage() {
+        if (this.currentStep < 0) {
+            return 'Game OVER!';
+        }
+        return this.steps[this.currentStep][0];
+    }
+
+    saveAnswer(state) {
+        return this.steps[this.currentStep][1](state);
+    }
+}
+
+const createTasksNotionPageStory = [
+    ['Введите заголовок', async (state) => {
+        return 1;
+    }],
+    ['Создание заметки', async (state) => {
+        return addNotionPage(NOTION_DATABASES[state.storyKey], state.text)
+            .then(() => -1)
+            .catch(() => state.stepNumber);
+    }],
+];
+
+const STORIES = {
+    [NOTION_STORIES_KEYS.NotionTask]: createTasksNotionPageStory,
+}
 
 bot.setMyCommands([
     {command: '/start', description: 'Начать работу с ботом'},
@@ -51,7 +142,10 @@ bot.on('message', async message => {
 
 bot.on('callback_query', async msg => {
     const chatId = msg.message.chat.id;
-    return bot.sendMessage(chatId, msg.data);
+    const restoredState = await storage.get(chatId);
+    const newState = {...restoredState, storyKey: msg.data};
+    await storage.set(chatId, newState);
+    return storyStep(chatId, newState);
 })
 
 // Handlers
@@ -60,9 +154,7 @@ async function startCommandHandler(chatId) {
 }
 
 async function notionCommandHandler(chatId) {
-    // await addNotionPageToPlanner('New task');
-    // await addNotionPageToBooks('New book');
-    // await addNotionPageToTV('New TV');
+    storage.set(chatId, {type: 'story'});
     return bot.sendMessage(chatId, `Выберите базу данных`, notionTypes)
 }
 
@@ -71,73 +163,41 @@ async function infoCommandHandler(chatId) {
 }
 
 async function defaultCommandHandler(chatId, text) {
-    if (text.match(/^\//)) {
+    const isCommand = text.match(/^\//);
+    if (isCommand) {
         return bot.sendMessage(chatId, `Неопознанная команда! Введите /info для справки.`);
     }
-    // Пока идея такая - получать историю до последней введенной команды и определять на каком шаге сейчас находимся (этот код инкапсулировать бы в классы js)
+    const restoredState = storage.get(chatId);
+    const newState = {...restoredState, text}
+    await storyStep(chatId, newState);
+}
+
+async function storyStep(chatId, state) {
+    if (state && state.type === 'story') {
+        const {storyKey, stepNumber} = state;
+
+        let story = new Story(STORIES[storyKey]);
+
+        if (stepNumber) {
+            story.setStep(stepNumber);
+        }
+
+        if (story.currentStep >= 0) {
+            const stepNumber = await story.saveAnswer(state);
+            storage.set(chatId, {...state, stepNumber});
+        } else {
+            storage.clear(chatId);
+        }
+
+        return bot.sendMessage(chatId, story.getMessage());
+    }
 }
 
 // Notion API
-async function addNotionPageToPlanner(title) {
+async function addNotionPage(databaseId, title) {
     try {
-        const response = await notion.pages.create({
-            parent: {database_id: notionPlannerDatabaseId},
-            properties: {
-                title: {
-                    title: [
-                        {
-                            "text": {
-                                "content": title
-                            }
-                        }
-                    ]
-                },
-                Tags: {
-                    multi_select: [
-                        {name: notionBotTag}
-                    ]
-                }
-            },
-        })
-        console.log(response)
-        console.log("Success! Entry added.")
-    } catch (error) {
-        console.error('Error: ', error.body);
-    }
-}
-
-async function addNotionPageToBooks(title) {
-    try {
-        const response = await notion.pages.create({
-            parent: {database_id: notionBooksDatabaseId},
-            properties: {
-                title: {
-                    title: [
-                        {
-                            "text": {
-                                "content": title
-                            }
-                        }
-                    ]
-                },
-                Tags: {
-                    multi_select: [
-                        {name: notionBotTag}
-                    ]
-                }
-            },
-        })
-        console.log(response)
-        console.log("Success! Entry added.")
-    } catch (error) {
-        console.error('Error: ', error.body);
-    }
-}
-
-async function addNotionPageToTV(title) {
-    try {
-        const response = await notion.pages.create({
-            parent: {database_id: notionTVDatabaseId},
+        const response = await notionClient.pages.create({
+            parent: {database_id: databaseId},
             properties: {
                 title: {
                     title: [
