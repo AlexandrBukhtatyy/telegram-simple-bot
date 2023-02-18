@@ -105,6 +105,34 @@ const createTasksNotionPageStory = [
     }],
     ['Создание заметки', async (state) => {
         return addNotionPage(NOTION_DATABASES[state.storyKey], state.text)
+            .then(() => {
+                bot.sendMessage(state.chatId, `Заметка создана успешно!`);
+                return -1;
+            })
+            .catch(() => {
+                bot.sendMessage(state.chatId, `При создании заметки произошла ошибка!`);
+                return state.stepNumber;
+            });
+    }],
+];
+
+const createBookNotionPageStory = [
+    ['Введите заголовок', async (state) => {
+        return 1;
+    }],
+    ['Создание заметки', async (state) => {
+        return addNotionPage(NOTION_DATABASES[state.storyKey], state.text)
+            .then(() => -1)
+            .catch(() => state.stepNumber);
+    }],
+];
+
+const createTVNotionPageStory = [
+    ['Введите заголовок', async (state) => {
+        return 1;
+    }],
+    ['Создание заметки', async (state) => {
+        return addNotionPage(NOTION_DATABASES[state.storyKey], state.text)
             .then(() => -1)
             .catch(() => state.stepNumber);
     }],
@@ -112,6 +140,8 @@ const createTasksNotionPageStory = [
 
 const STORIES = {
     [NOTION_STORIES_KEYS.NotionTask]: createTasksNotionPageStory,
+    [NOTION_STORIES_KEYS.NotionBook]: createBookNotionPageStory,
+    [NOTION_STORIES_KEYS.NotionTV]: createTVNotionPageStory,
 }
 
 bot.setMyCommands([
@@ -143,7 +173,7 @@ bot.on('message', async message => {
 bot.on('callback_query', async msg => {
     const chatId = msg.message.chat.id;
     const restoredState = await storage.get(chatId);
-    const newState = {...restoredState, storyKey: msg.data};
+    const newState = {...restoredState, chatId, storyKey: msg.data};
     await storage.set(chatId, newState);
     return storyStep(chatId, newState);
 })
@@ -168,7 +198,7 @@ async function defaultCommandHandler(chatId, text) {
         return bot.sendMessage(chatId, `Неопознанная команда! Введите /info для справки.`);
     }
     const restoredState = storage.get(chatId);
-    const newState = {...restoredState, text}
+    const newState = {...restoredState, chatId, text}
     await storyStep(chatId, newState);
 }
 
